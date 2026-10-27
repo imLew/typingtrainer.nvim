@@ -8,32 +8,28 @@ Requires Neovim 0.9+.
 ## Usage
 
 ```vim
-:TypeTrainer {file}                  " start (insert mode by default)
-:TypeTrainer mode=normal {file}      " free editing with all normal mode commands
+:TypeTrainer {file}                  " start; you begin in insert mode
 :TypeTrainer indicator=underline,color {file}
 :TypeTrainerStop                     " end the session, keep the text
 ```
 
-Options may be given as `key=value` before the file: `mode`, `indicator`
-(comma-separated list), `open`. Try `:TypeTrainer examples/hello.txt`.
+Options may be given as `key=value` before the file: `indicator` (comma-separated list)
+and `open`. Try `:TypeTrainer examples/hello.txt`.
 
 Lua: `require("typetrainer").start(path, opts)`, `.stop(buf)`, `.status(buf)`
 (`"12/340 chars, 2 wrong"`, for a statusline).
 
-### Modes
+You start in insert mode, but nothing is locked: `<Esc>`, every normal mode command
+(`dd`, `ciw`, `.`, `u`, ...) and every other mode work as usual. After each change the buffer
+is compared with the target. A character that matches the ghost text is entered normally; one
+that does not is entered too but marked as wrong. `<BS>` and `<Del>` work on both.
 
-- **insert** (default): you start in insert mode and stay there; `<Esc>` and `<C-c>` are
-  disabled. Type the text. A character that matches the ghost text is entered normally; one that
-  does not is entered too but marked as wrong. `<BS>` and `<Del>` work as usual on both.
-  End the session with `<C-q>` (`quit_key`) or `:TypeTrainerStop` (via `<C-o>:`).
-- **normal**: the same buffer, but `<Esc>` works and every normal mode command is available
-  (`dd`, `ciw`, `.`, `u`, ...). Whatever the buffer holds is compared with the target after each change.
-
-In both modes the ghost text is whatever remains of each target line after the characters
-you have typed on it. Comparison is by position, so inserting a character early on a line
-marks the rest of that line as wrong until you fix it. A line or character past the end of the
-target is wrong too. When the buffer equals the target, you get a notification and a
-`User TypeTrainerComplete` autocommand fires.
+The ghost text is whatever remains of each target line after the characters you have typed
+on it. Comparison is by position, so inserting a character early on a line marks the rest of
+that line as wrong until you fix it. A line or character past the end of the target is wrong
+too. When the buffer equals the target you get a notification with the number of characters,
+keystrokes and seconds, and a `User TypeTrainerComplete` autocommand fires. Keystrokes are
+every key you type in the trainer buffer, corrections included.
 
 The trainer buffer turns off `autoindent`, `smartindent`, `expandtab`, `formatoptions`, etc.,
 so what you type is exactly what is compared. Plugins that insert text for you (auto-pairs,
@@ -45,13 +41,17 @@ Calling `setup` is optional. Defaults:
 
 ```lua
 require("typetrainer").setup({
-  mode = "insert",          -- "insert" | "normal"
-  indicator = "underline",  -- "underline" | "color" | "background", or a list of them
-  error_color = "#ff5555",
-  quit_key = "<C-q>",       -- insert mode only
-  open = "current",         -- "current" | "split" | "vsplit" | "tab"
+  indicator = "auto",   -- "auto" | "underline" | "color" | "background", or a list (not with "auto")
+  error_color = "red",
+  open = "current",     -- "current" | "split" | "vsplit" | "tab"
 })
 ```
+
+`"auto"` uses a red underline when `'termguicolors'` is set. Without it Neovim ignores the
+underline color, so `auto` marks wrong characters with red text in plain text files
+(text, markdown, unknown types) and a red background in code. Colored underlines also need a
+terminal that supports them; if yours does not, use `indicator = { "underline", "color" }`
+(the underline then takes the red of the text).
 
 Ghost text uses the `TypeTrainerGhost` group (linked to `Comment`; override it freely).
 Wrong characters use `TypeTrainerWrong`, derived from `indicator` and `error_color`.
@@ -69,4 +69,4 @@ make test     # nvim --headless -u NONE -l tests/run.lua
 
 No dependencies. `core_spec` and `config_spec` are unit tests of the pure logic,
 `session_spec` covers buffer behaviour in-process, and `e2e_spec` drives a real child
-Neovim over RPC (insert mode, `<Esc>` blocking, quit key, `TextChangedI` wiring).
+Neovim over RPC (starting in insert mode, `TextChangedI` wiring, exact keystroke counts).

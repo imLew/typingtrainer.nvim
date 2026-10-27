@@ -6,7 +6,6 @@ local session = require("typetrainer.session")
 local M = {}
 
 local user_opts = {}
-local configured = false
 
 --- Configure defaults. Calling it is optional.
 ---@param opts? table see typetrainer.config.defaults
@@ -14,7 +13,6 @@ function M.setup(opts)
   local cfg = config.normalize(opts) -- validate before storing
   user_opts = opts or {}
   highlight.setup(cfg)
-  configured = true
 end
 
 local OPEN_CMDS = { split = "split", vsplit = "vsplit", tab = "tab split" }
@@ -32,9 +30,7 @@ function M.start(path, opts)
   if not target then
     return nil, err
   end
-  if not configured then
-    highlight.setup(cfg)
-  end
+  highlight.setup(cfg, path)
 
   local buf = vim.api.nvim_create_buf(true, true)
   vim.api.nvim_buf_set_name(buf, ("typetrainer://%s#%d"):format(vim.fn.fnamemodify(path, ":t"), buf))
@@ -44,9 +40,7 @@ function M.start(path, opts)
   vim.api.nvim_win_set_buf(0, buf)
 
   local s = session.new(buf, target, cfg)
-  if cfg.mode == "insert" then
-    vim.cmd("startinsert")
-  end
+  vim.cmd("startinsert")
   return s
 end
 

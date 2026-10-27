@@ -44,6 +44,7 @@ function M.new(buf, target, cfg)
     target = target,
     cfg = cfg,
     total = core.total_chars(target),
+    keystrokes = 0,
     typed = 0,
     wrong = 0,
     completed = false,
@@ -69,15 +70,13 @@ function M.new(buf, target, cfg)
     end,
   })
 
-  if cfg.mode == "insert" then
-    local opts = { buffer = buf, nowait = true }
-    vim.keymap.set("i", "<Esc>", "<Nop>", opts)
-    vim.keymap.set("i", "<C-c>", "<Nop>", opts)
-    vim.keymap.set("i", cfg.quit_key, function()
-      self:stop()
-      vim.cmd("stopinsert")
-    end, opts)
-  end
+  -- Every key typed while the trainer buffer is current counts as a keystroke.
+  self.key_ns = api.nvim_create_namespace("typetrainer_keys_" .. buf)
+  vim.on_key(function()
+    if api.nvim_get_current_buf() == buf then
+      self.keystrokes = self.keystrokes + 1
+    end
+  end, self.key_ns)
 
   self:render()
   return self
@@ -142,17 +141,20 @@ function Session:complete()
   self.completed = true
   local seconds = self.started_at and (uv.hrtime() - self.started_at) / 1e9 or 0
   self.elapsed = seconds
-  vim.notify(("TypeTrainer: complete! %d characters in %.1fs"):format(self.total, seconds))
+  vim.notify(
+    ("TypeTrainer: complete! %d characters, %d keystrokes, %.1fs"):format(self.total, self.keystrokes, seconds)
+  )
   api.nvim_exec_autocmds("User", { pattern = "TypeTrainerComplete", modeline = false, data = { buf = self.buf } })
 end
 
----@return table {typed, wrong, correct, total, complete}
+---@return table {typed, wrong, correct, total, keystrokes, complete}
 function Session:stats()
   return {
     typed = self.typed,
     wrong = self.wrong,
     correct = self.typed - self.wrong,
     total = self.total,
+    keystrokes = self.keystrokes,
     complete = self.completed,
   }
 end
@@ -164,14 +166,10 @@ function Session:stop()
     return
   end
   registry[self.buf] = nil
+  vim.on_key(nil, self.key_ns)
   pcall(api.nvim_del_augroup_by_id, self.group)
   if api.nvim_buf_is_valid(self.buf) then
     api.nvim_buf_clear_namespace(self.buf, M.ns, 0, -1)
-    if self.cfg.mode == "insert" then
-      for _, lhs in ipairs({ "<Esc>", "<C-c>", self.cfg.quit_key }) do
-        pcall(vim.keymap.del, "i", lhs, { buffer = self.buf })
-      end
-    end
   end
 end
 

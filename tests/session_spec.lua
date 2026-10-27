@@ -1,12 +1,13 @@
--- In-process tests of session logic. Sessions use mode = "normal" and are driven
--- with explicit `i...<Esc>`: `startinsert` and the insert-only mappings need a real
--- event loop, which tests/e2e_spec.lua provides.
+-- In-process tests of session logic, driven with explicit `i...<Esc>`.
+-- start() ends with `startinsert`, which only takes effect in a real event loop (covered
+-- by tests/e2e_spec.lua), so the helper cancels it to keep these tests deterministic.
 local typetrainer = require("typetrainer")
 local session = require("typetrainer.session")
 
 local function start(lines, opts)
-  local s, err = typetrainer.start(tmpfile(lines), vim.tbl_extend("force", { mode = "normal" }, opts or {}))
+  local s, err = typetrainer.start(tmpfile(lines), opts)
   assert(s, err)
+  vim.cmd("stopinsert")
   return s
 end
 
@@ -24,11 +25,6 @@ describe("start", function()
     eq({ "world" }, snap.virt_lines)
   end)
 
-  it("starts in normal mode when mode = normal", function()
-    start({ "ab" })
-    eq("n", vim.api.nvim_get_mode().mode)
-  end)
-
   it("returns an error for a missing file", function()
     local s, err = typetrainer.start("/nonexistent/x.txt")
     eq(nil, s)
@@ -36,9 +32,9 @@ describe("start", function()
   end)
 
   it("returns an error for invalid options", function()
-    local s, err = typetrainer.start(tmpfile({ "a" }), { mode = "bogus" })
+    local s, err = typetrainer.start(tmpfile({ "a" }), { open = "bogus" })
     eq(nil, s)
-    assert(err:find("invalid mode"), err)
+    assert(err:find("invalid open"), err)
   end)
 
   it("disables options that would alter typed text", function()
@@ -166,7 +162,7 @@ describe("completion", function()
     feed("ic<Esc>")
     eq(1, fired)
     eq(true, s:stats().complete)
-    assert(notified[1]:find("complete"), vim.inspect(notified))
+    assert(notified[1]:find("complete! 3 characters, %d+ keystrokes"), vim.inspect(notified))
     eq("3/3 chars, 0 wrong", typetrainer.status(s.buf))
 
     -- breaking it and fixing it again completes again
@@ -183,6 +179,42 @@ describe("completion", function()
     local s = start({ "ab" })
     feed("iax<Esc>")
     eq(false, s:stats().complete)
+  end)
+end)
+
+describe("keystrokes", function()
+  it("counts every key typed in the trainer buffer", function()
+    local s = start({ "ab" })
+    eq(0, s.keystrokes)
+    feed("iab<Esc>")
+    eq(4, s.keystrokes)
+    eq(4, s:stats().keystrokes)
+  end)
+
+  it("ignores keys typed in other buffers", function()
+    local s = start({ "ab" })
+    vim.cmd("enew")
+    feed("ixyz<Esc>")
+    eq(0, s.keystrokes)
+  end)
+
+  it("stops counting after the session ends", function()
+    local s = start({ "ab" })
+    typetrainer.stop()
+    feed("ix<Esc>")
+    eq(0, s.keystrokes)
+  end)
+
+  it("mentions keystrokes in the completion message", function()
+    local msgs = {}
+    local orig = vim.notify
+    vim.notify = function(msg)
+      table.insert(msgs, msg)
+    end
+    start({ "ab" })
+    feed("iab<Esc>")
+    vim.notify = orig
+    assert(msgs[1]:find("complete! 2 characters, 4 keystrokes, "), vim.inspect(msgs))
   end)
 end)
 
@@ -250,7 +282,7 @@ end)
 
 describe("commands and setup", function()
   it(":TypeTrainer starts a session and :TypeTrainerStop ends it", function()
-    vim.cmd("TypeTrainer mode=normal " .. vim.fn.fnameescape(tmpfile({ "hi" })))
+    vim.cmd("TypeTrainer " .. vim.fn.fnameescape(tmpfile({ "hi" })))
     assert(session.get(), "no session")
     vim.cmd("TypeTrainerStop")
     eq(nil, session.get())
@@ -263,7 +295,7 @@ describe("commands and setup", function()
       table.insert(msgs, { msg, level })
     end
     vim.cmd("TypeTrainer /nonexistent/x.txt")
-    vim.cmd("TypeTrainer mode=normal") -- no file given
+    vim.cmd("TypeTrainer open=tab") -- no file given
     eq(false, pcall(vim.cmd, "TypeTrainer")) -- nargs=+ rejects this itself
     vim.notify = orig
     eq(2, #msgs)
@@ -286,24 +318,55 @@ describe("commands and setup", function()
   it("setup applies the indicator to the highlight group", function()
     typetrainer.setup({ indicator = { "color" }, error_color = "#123456" })
     eq(0x123456, vim.api.nvim_get_hl(0, { name = "TypeTrainerWrong" }).fg)
+    typetrainer.setup({ indicator = "underline", error_color = "#123456" })
+    local hl = vim.api.nvim_get_hl(0, { name = "TypeTrainerWrong" })
+    eq(true, hl.underline)
+    eq(0x123456, hl.sp)
     typetrainer.setup({})
-    eq(true, vim.api.nvim_get_hl(0, { name = "TypeTrainerWrong" }).underline)
+  end)
+
+  it("auto indicator: red underline with termguicolors", function()
+    local saved = vim.o.termguicolors
+    vim.o.termguicolors = true
+    start({ "x" })
+    local hl = vim.api.nvim_get_hl(0, { name = "TypeTrainerWrong" })
+    eq(true, hl.underline)
+    eq(0xff0000, hl.sp)
+    vim.o.termguicolors = saved
+  end)
+
+  it("auto indicator: red text for plain text, red background for code, without termguicolors", function()
+    local saved = vim.o.termguicolors
+    vim.o.termguicolors = false
+    local dir = vim.fn.tempname()
+    vim.fn.mkdir(dir)
+    local txt, lua = dir .. "/notes.txt", dir .. "/init.lua"
+    vim.fn.writefile({ "x" }, txt)
+    vim.fn.writefile({ "x" }, lua)
+
+    assert(typetrainer.start(txt))
+    local hl = vim.api.nvim_get_hl(0, { name = "TypeTrainerWrong", link = false })
+    eq(true, hl.ctermfg ~= nil and hl.ctermbg == nil)
+
+    assert(typetrainer.start(lua))
+    hl = vim.api.nvim_get_hl(0, { name = "TypeTrainerWrong", link = false })
+    eq(true, hl.ctermbg ~= nil)
+    vim.o.termguicolors = saved
   end)
 
   it("setup defaults are used by start and overridden per call", function()
-    typetrainer.setup({ mode = "normal", open = "split" })
+    typetrainer.setup({ open = "split" })
     local before = #vim.api.nvim_tabpage_list_wins(0)
-    local s = assert(typetrainer.start(tmpfile({ "a" })))
+    assert(typetrainer.start(tmpfile({ "a" })))
     eq(before + 1, #vim.api.nvim_tabpage_list_wins(0))
-    eq("normal", s.cfg.mode)
-    s = assert(typetrainer.start(tmpfile({ "a" }), { open = "current" }))
+    assert(typetrainer.start(tmpfile({ "a" }), { open = "current" }))
     eq(before + 1, #vim.api.nvim_tabpage_list_wins(0))
     typetrainer.setup({})
   end)
 
   it("setup rejects invalid options and keeps the old config", function()
     eq(false, (pcall(typetrainer.setup, { indicator = "nope" })))
-    local s = assert(typetrainer.start(tmpfile({ "a" }), { mode = "normal" }))
-    eq({ "underline" }, s.cfg.indicator)
+    local s = assert(typetrainer.start(tmpfile({ "a" })))
+    eq({ "auto" }, s.cfg.indicator)
   end)
 end)
