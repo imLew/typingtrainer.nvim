@@ -53,6 +53,37 @@ function M.stop(buf)
   return s ~= nil
 end
 
+local function edit_lines(kind, first, last, buf)
+  local s = session.get(buf)
+  if not s then
+    return false
+  end
+  local cursor = vim.api.nvim_win_get_cursor(0)[1]
+  s[kind](s, first or cursor, last or first or cursor)
+  return true
+end
+
+--- Make lines first..last (default: the cursor line) real text: the ghost text is
+--- typed for you. Returns false when there is no session in the buffer.
+function M.skip(first, last, buf)
+  return edit_lines("skip", first, last, buf)
+end
+
+--- Remove what was typed on lines first..last (default: the cursor line), leaving
+--- the original ghost text. Returns false when there is no session in the buffer.
+function M.reset(first, last, buf)
+  return edit_lines("reset", first, last, buf)
+end
+
+-- 'operatorfunc' targets: act on the lines covered by the motion, whatever its type.
+local function operator(kind)
+  return function()
+    M[kind](vim.fn.line("'["), vim.fn.line("']"))
+  end
+end
+M.operator_skip = operator("skip")
+M.operator_reset = operator("reset")
+
 --- Progress summary, handy for a statusline. Empty when no session is active.
 function M.status(buf)
   local s = session.get(buf)

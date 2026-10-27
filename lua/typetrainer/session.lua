@@ -134,6 +134,43 @@ function Session:render()
   end)
 end
 
+--- Skip (ghost text becomes real) or reset (typed text removed) the lines first..last.
+--- Lines are 1-based and clamped to the buffer. One undo step.
+---@param kind "skip"|"reset"
+function Session:edit_lines(kind, first, last)
+  local count = api.nvim_buf_line_count(self.buf)
+  first, last = math.max(first, 1), math.min(last, count)
+  if first > last then
+    return
+  end
+  local lines = api.nvim_buf_get_lines(self.buf, 0, -1, false)
+  local replacement = core.range_edit(lines, self.target, first, last, kind)
+  api.nvim_buf_set_lines(self.buf, first - 1, last, false, replacement)
+
+  -- skip: continue at the end of what was filled in; reset: start over at the line start
+  local row, col
+  if kind == "skip" then
+    row = last
+    col = #replacement[#replacement]
+  else
+    row = first
+    col = 0
+  end
+  row = math.min(row, api.nvim_buf_line_count(self.buf))
+  if api.nvim_get_current_buf() == self.buf then
+    api.nvim_win_set_cursor(0, { row, col })
+  end
+  self:render()
+end
+
+function Session:skip(first, last)
+  self:edit_lines("skip", first, last)
+end
+
+function Session:reset(first, last)
+  self:edit_lines("reset", first, last)
+end
+
 function Session:complete()
   if self.completed then
     return

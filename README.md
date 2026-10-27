@@ -11,6 +11,8 @@ Requires Neovim 0.9+.
 :TypeTrainer {file}                  " start; you begin in insert mode
 :TypeTrainer indicator=underline,color {file}
 :TypeTrainerStop                     " end the session, keep the text
+:[range]TypeTrainerSkip              " ghost text becomes real text on these lines
+:[range]TypeTrainerReset             " remove the typed text, leaving the ghost text
 ```
 
 Options may be given as `key=value` before the file: `indicator` (comma-separated list)
@@ -34,6 +36,33 @@ every key you type in the trainer buffer, corrections included.
 The trainer buffer turns off `autoindent`, `smartindent`, `expandtab`, `formatoptions`, etc.,
 so what you type is exactly what is compared. Plugins that insert text for you (auto-pairs,
 completion) should be disabled for this buffer.
+
+## Skipping and resetting lines
+
+*Skip* turns the ghost text of a line into real text (any text already on the line is
+replaced). *Reset* removes what is on a line so the full ghost line shows again. Both work on
+whole lines and are a single undo step:
+
+- Ex ranges: `:TypeTrainerSkip` (current line), `:3,5TypeTrainerReset`, `:%TypeTrainerSkip`.
+- Motions, text objects and counts, through operator mappings.
+- Visual selections of any kind (`v`, `V`, `CTRL-V`): every selected line is affected.
+
+Lines past the end of the target have no ghost text: skip leaves them alone, reset deletes
+them. Ranges only reach lines that exist in the buffer, so press `<CR>` or `o` first to
+open lines further ahead. Skipping everything completes the exercise like typing it would.
+
+There are no default mappings; bind the `<Plug>` ones:
+
+```lua
+vim.keymap.set({ "n", "x" }, "gs", "<Plug>(TypeTrainerSkip)")     -- gsj, gsip, 3gs{motion}, visual
+vim.keymap.set("n", "gss", "<Plug>(TypeTrainerSkipLine)")         -- current line, takes a count
+vim.keymap.set({ "n", "x" }, "gr", "<Plug>(TypeTrainerReset)")
+vim.keymap.set("n", "grr", "<Plug>(TypeTrainerResetLine)")
+```
+
+After a skip the cursor sits at the end of the last skipped line, ready to continue;
+after a reset it is at the start of the first reset line. The Lua API is
+`require("typetrainer").skip(first, last)` and `.reset(first, last)` (default: cursor line).
 
 ## Configuration
 

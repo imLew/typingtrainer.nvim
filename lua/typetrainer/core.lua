@@ -136,6 +136,26 @@ function M.compare(lines, target, max_remaining)
   return result
 end
 
+--- The lines that should replace `lines[first..last]` after skipping or resetting them.
+---   skip:  each line becomes its target line (ghost text turns real); lines past the
+---          end of the target have nothing to skip to and are kept as they are
+---   reset: each line is emptied so the whole target line shows as ghost text again;
+---          lines past the end of the target are dropped, as there is no ghost to leave
+---@param kind "skip"|"reset"
+---@return string[]
+function M.range_edit(lines, target, first, last, kind)
+  local out = {}
+  for i = first, last do
+    local want = target[i]
+    if kind == "skip" then
+      out[#out + 1] = want or lines[i]
+    elseif want then
+      out[#out + 1] = ""
+    end
+  end
+  return out
+end
+
 --- True when the buffer reproduces the target exactly.
 function M.is_complete(lines, target)
   if #lines ~= #target then

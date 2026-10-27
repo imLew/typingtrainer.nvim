@@ -166,6 +166,53 @@ describe("e2e", function()
   end)
 end)
 
+describe("e2e skip and reset", function()
+  local MAPS = [[
+    vim.keymap.set({ "n", "x" }, "gs", "<Plug>(TypeTrainerSkip)")
+    vim.keymap.set("n", "gss", "<Plug>(TypeTrainerSkipLine)")
+    vim.keymap.set({ "n", "x" }, "gr", "<Plug>(TypeTrainerReset)")
+    vim.keymap.set("n", "grr", "<Plug>(TypeTrainerResetLine)")
+  ]]
+
+  it("works through bound mappings: line, motion, visual and dot-repeat", function()
+    with_session({ "a", "b", "c", "d", "e" }, {}, function(c)
+      c.lua(MAPS)
+      c.wait_for(c.mode, "i", "insert mode")
+      c.send("<Esc>4o<Esc>gg") -- five buffer lines
+      c.wait_for(c.lines, { "", "", "", "", "" }, "empty lines")
+
+      c.send("gss")
+      c.wait_for(c.lines, { "a", "", "", "", "" }, "gss")
+      c.send("jgsj")
+      c.wait_for(c.lines, { "a", "b", "c", "", "" }, "gsj")
+      c.send("j.") -- dot repeats the operator and its motion
+      c.wait_for(c.lines, { "a", "b", "c", "d", "e" }, "dot repeat")
+
+      c.send("ggVjgr")
+      c.wait_for(c.lines, { "", "", "c", "d", "e" }, "visual linewise reset")
+      c.send("Gk<C-v>jgr")
+      c.wait_for(c.lines, { "", "", "c", "", "" }, "visual blockwise reset")
+      c.send("ggvjgs")
+      c.wait_for(c.lines, { "a", "b", "c", "", "" }, "visual charwise skip")
+      eq("n", c.mode())
+      eq({}, c.snapshot().wrong)
+    end)
+  end)
+
+  it("works as ex commands with ranges", function()
+    with_session({ "a", "b", "c" }, {}, function(c)
+      c.wait_for(c.mode, "i", "insert mode")
+      c.send("<Esc>2o<Esc>")
+      c.wait_for(c.lines, { "", "", "" }, "empty lines")
+      c.cmd("2,3TypeTrainerSkip")
+      eq({ "", "b", "c" }, c.lines())
+      c.cmd("TypeTrainerReset")
+      c.cmd("%TypeTrainerSkip")
+      eq({ "a", "b", "c" }, c.lines())
+    end)
+  end)
+end)
+
 describe("e2e :TypeTrainer command", function()
   it("starts and stops a session from the command line", function()
     local child = spawn()

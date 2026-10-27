@@ -370,3 +370,172 @@ describe("commands and setup", function()
     eq({ "auto" }, s.cfg.indicator)
   end)
 end)
+
+describe("skip and reset", function()
+  local function typed(s, keys)
+    feed(keys)
+    return buf_lines(s)
+  end
+
+  it("skip turns the ghost text of the cursor line into real text", function()
+    local s = start({ "hello", "world" })
+    assert(typetrainer.skip())
+    eq({ "hello" }, buf_lines(s))
+    eq({}, snapshot(s.buf).wrong)
+    eq({ "world" }, snapshot(s.buf).virt_lines)
+  end)
+
+  it("skip replaces partly typed and wrong text", function()
+    local s = start({ "hello" })
+    feed("ihxl<Esc>")
+    typetrainer.skip()
+    eq({ "hello" }, buf_lines(s))
+    eq(true, s:stats().complete)
+  end)
+
+  it("skip puts the cursor at the end of the last skipped line", function()
+    local s = start({ "ab", "cde", "f" })
+    feed("o<Esc>o<Esc>") -- three buffer lines
+    typetrainer.skip(1, 2)
+    -- the end of "cde"; normal mode keeps the cursor on the last character
+    eq({ 2, 2 }, vim.api.nvim_win_get_cursor(0))
+    eq({ "ab", "cde", "" }, vim.api.nvim_buf_get_lines(s.buf, 0, -1, false))
+  end)
+
+  it("reset removes typed text and brings back the full ghost line", function()
+    local s = start({ "hello", "world" })
+    feed("ihelxo<CR>wor<Esc>")
+    typetrainer.reset(1, 2)
+    eq({ "", "" }, buf_lines(s))
+    local snap = snapshot(s.buf)
+    eq("hello", snap.ghost[0])
+    eq("world", snap.ghost[1])
+    eq({}, snap.wrong)
+    eq({ 1, 0 }, vim.api.nvim_win_get_cursor(0))
+  end)
+
+  it("reset leaves other lines alone", function()
+    local s = start({ "a", "b", "c" })
+    feed("ia<CR>b<CR>c<Esc>")
+    typetrainer.reset(2, 2)
+    eq({ "a", "", "c" }, buf_lines(s))
+  end)
+
+  it("reset deletes lines beyond the target; skip keeps them", function()
+    local s = start({ "a" })
+    feed("ia<CR>x<CR>y<Esc>")
+    typetrainer.skip(1, 3)
+    eq({ "a", "x", "y" }, buf_lines(s))
+    typetrainer.reset(1, 3)
+    eq({ "" }, buf_lines(s))
+  end)
+
+  it("clamps ranges to the buffer", function()
+    local s = start({ "a", "b", "c" })
+    typetrainer.skip(1, 99)
+    eq({ "a" }, buf_lines(s))
+    typetrainer.skip(-5, 0)
+    eq({ "a" }, buf_lines(s))
+  end)
+
+  it("is a single undo step", function()
+    local s = start({ "a", "b", "c" })
+    feed("ia<CR>x<CR>y<Esc>")
+    vim.cmd("let &undolevels = &undolevels") -- typed commands are separate undo steps; a script's are not
+    typetrainer.skip(1, 3)
+    eq({ "a", "b", "c" }, buf_lines(s))
+    feed("u")
+    eq({ "a", "x", "y" }, buf_lines(s))
+    eq({ [1] = { { 0, 1 } }, [2] = { { 0, 1 } } }, snapshot(s.buf).wrong)
+  end)
+
+  it("returns false without a session", function()
+    vim.cmd("enew")
+    eq(false, typetrainer.skip())
+    eq(false, typetrainer.reset())
+  end)
+
+  it(":TypeTrainerSkip and :TypeTrainerReset take a range, defaulting to the current line", function()
+    local s = start({ "a", "b", "c", "d" })
+    feed("ia<CR>b<CR>c<CR>d<Esc>")
+    vim.cmd("TypeTrainerReset")
+    eq({ "a", "b", "c", "" }, buf_lines(s))
+    vim.cmd("2,3TypeTrainerReset")
+    eq({ "a", "", "", "" }, buf_lines(s))
+    vim.cmd("%TypeTrainerSkip")
+    eq({ "a", "b", "c", "d" }, buf_lines(s))
+    vim.cmd("1,2TypeTrainerReset")
+    eq({ "", "", "c", "d" }, buf_lines(s))
+  end)
+
+  it(":TypeTrainerSkip warns without a session", function()
+    vim.cmd("enew")
+    local msgs = {}
+    local orig = vim.notify
+    vim.notify = function(msg, level)
+      table.insert(msgs, { msg, level })
+    end
+    vim.cmd("TypeTrainerSkip")
+    vim.cmd("TypeTrainerReset")
+    vim.notify = orig
+    eq(2, #msgs)
+    eq(vim.log.levels.WARN, msgs[1][2])
+  end)
+
+  describe("mappings", function()
+    local function fill(lines)
+      local s = start(lines)
+      -- as many empty buffer lines as target lines
+      feed(string.rep("o<Esc>", #lines - 1) .. "gg")
+      return s
+    end
+
+    it("operator with a linewise motion", function()
+      local s = fill({ "a", "b", "c", "d" })
+      feed("<Plug>(TypeTrainerSkip)j")
+      eq({ "a", "b", "", "" }, buf_lines(s))
+    end)
+
+    it("operator with a characterwise motion touches every line it spans", function()
+      local s = fill({ "a", "b", "c", "d" })
+      feed("jj<Plug>(TypeTrainerSkip)k") -- k is linewise; try a charwise one next
+      eq({ "", "b", "c", "" }, buf_lines(s))
+      feed("gg<Plug>(TypeTrainerSkip)/c<CR>")
+      eq({ "a", "b", "c", "" }, buf_lines(s))
+    end)
+
+    it("operator with a text object", function()
+      local s = fill({ "a", "b", "", "d" })
+      typetrainer.skip(1, 4)
+      -- `ip` on line 1 is the paragraph made of lines 1-2; line 3 is blank, line 4 is another paragraph
+      feed("gg<Plug>(TypeTrainerReset)ip")
+      eq({ "", "", "", "d" }, buf_lines(s))
+    end)
+
+    it("line variant honours a count", function()
+      local s = fill({ "a", "b", "c", "d" })
+      feed("2<Plug>(TypeTrainerSkipLine)")
+      eq({ "a", "b", "", "" }, buf_lines(s))
+      feed("gg3<Plug>(TypeTrainerResetLine)")
+      eq({ "", "", "", "" }, buf_lines(s))
+    end)
+
+    it("reset operator", function()
+      local s = fill({ "a", "b", "c" })
+      typetrainer.skip(1, 3)
+      feed("gg<Plug>(TypeTrainerReset)j")
+      eq({ "", "", "c" }, buf_lines(s))
+    end)
+
+    for name, keys in pairs({ charwise = "vj", linewise = "Vj", blockwise = "<C-v>j" }) do
+      it("visual " .. name .. " selection acts on every selected line", function()
+        local s = fill({ "a", "b", "c", "d" })
+        feed("ggl" .. keys .. "<Plug>(TypeTrainerSkip)")
+        eq({ "a", "b", "", "" }, buf_lines(s))
+        feed("gg" .. keys .. "<Plug>(TypeTrainerReset)")
+        eq({ "", "", "", "" }, buf_lines(s))
+        eq("n", vim.api.nvim_get_mode().mode)
+      end)
+    end
+  end)
+end)
